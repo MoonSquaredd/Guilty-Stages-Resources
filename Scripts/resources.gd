@@ -102,9 +102,14 @@ func retrievePalettes():
 		var paletteSize = (16**(bpp/4))
 		var paletteStart = tileList[i] + 16
 		var paletteEnd = paletteStart + paletteSize*4
+		var off = 0
+		file.seek(paletteEnd-4)
+		var lastColor = file.get_32()
+		if lastColor == 0:
+			off = 4
 		extrasFile.store_string("Tile " + str(i+1) + "\n")
-		extrasFile.store_string("0x%X \n" % [paletteStart])
-		extrasFile.store_string("0x%X \n\n" % [paletteEnd])
+		extrasFile.store_string("0x%X \n" % [paletteStart-off])
+		extrasFile.store_string("0x%X \n\n" % [paletteEnd-off])
 	
 	extrasFile.close()
 	file.close()
@@ -125,16 +130,21 @@ func createPreviews():
 		var width = file.get_16()
 		var height = file.get_16()
 		var paletteSize = (16**(bpp/4))
-		file.seek(tileList[i]+16+(paletteSize*4))
+		file.seek(tileList[i]+12+(paletteSize*4))
+		var lastColor = file.get_32()
+		
 		var preview = FileAccess.open(outputFolder + "/" + selectedStage + " resources/Tile_" + str(i+1) + "-W-" + str(width) + "-H-" + str(height) + ".raw", FileAccess.WRITE)
 		for j in range(height):
 			for k in range(width):
 				var byte = file.get_8()
-				if byte%32 > 7 and byte%32 < 23:
-					if byte%32 < 16:
-						byte += 8
-					else:
-						byte -= 8
+				if bpp == 8:
+					if byte%32 > 7 and byte%32 < 23:
+						if byte%32 < 16:
+							byte += 8
+						else:
+							byte -= 8
+				if lastColor == 0:
+					byte += 1
 				preview.store_8(byte)
 		preview.close()
 	file.close()
@@ -198,7 +208,7 @@ func _on_button_pressed():
 	outputFolder = outPath
 	DirAccess.make_dir_absolute(outputFolder + "/" + selectedStage + " resources")
 	
-	if get_node("Options/Previews").button_pressed:
+	if get_node("Options/Palettes").button_pressed:
 		var result = retrievePalettes()
 		if result == 1:
 			$Error.text = "Error: Could not find stage file"
