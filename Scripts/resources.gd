@@ -69,6 +69,7 @@ func getTileInfo(file: FileAccess, tile):
 	return {"bpp" = bpp, "width" = width, "height" = height, "paletteSize" = paletteSize, "raw" = raw, "rawSize" = rawSize}
 
 func getTiles(file: FileAccess):
+	file.seek(0)
 	var tiles = []
 	var offsetToTiles = file.get_32()
 	file.seek(offsetToTiles+4)
@@ -83,14 +84,48 @@ func getTiles(file: FileAccess):
 	
 	return tiles
 
+func getSprites(file: FileAccess):
+	file.seek(4)
+	var objects = []
+	var sprites = []
+	
+	while not file.eof_reached():
+		var object = file.get_32()
+		
+		if object == 0xFFFFFFFF:
+			break
+		else:
+			objects.append(object)
+	
+	if objects.size() <= 1:
+		return ["no objects"]
+	
+	for i in range(objects.size() - 1):
+		var offsetToObject = objects[i]
+		file.seek(offsetToObject+4)
+		var offsetToSprites = file.get_32()
+		file.seek(offsetToSprites + offsetToObject)
+		
+		while not file.eof_reached():
+			var current = file.get_32()
+		
+			if current == 0xFFFFFFFF:
+				break
+			else:
+				sprites.append(current + offsetToObject + offsetToSprites)
+	
+	return sprites
+
 func retrievePalettes():
 	var tileList = []
+	var spriteList = []
 	var stageFileName = stageNames[selectedStage]
 	
 	var file = FileAccess.open(stageFolder + "/" + stageFileName, FileAccess.READ)
 	if not file:
 		return 1
 	tileList = getTiles(file)
+	spriteList = getSprites(file)
 	
 	var extrasFile = FileAccess.open(outputFolder + "/" + selectedStage + " resources/" + stageFileName.erase(stageFileName.length() - 4, 4) + "E.txt", FileAccess.WRITE)
 	extrasFile.store_string(";GameName=" + selectedStage + "\n")
@@ -111,18 +146,36 @@ func retrievePalettes():
 		extrasFile.store_string("0x%X \n" % [paletteStart-off])
 		extrasFile.store_string("0x%X \n\n" % [paletteEnd-off])
 	
+	if spriteList != ["no objects"]:
+		for i in range(spriteList.size()):
+			file.seek(spriteList[i]+4)
+			var bpp = file.get_8()
+			var paletteSize = (16**(bpp/4))
+			var paletteStart = spriteList[i] + 16
+			var paletteEnd = paletteStart + paletteSize*4
+			var off = 0
+			file.seek(paletteEnd-4)
+			var lastColor = file.get_32()
+			if lastColor == 0:
+				off = 4
+			extrasFile.store_string("Sprite " + str(i+1) + "\n")
+			extrasFile.store_string("0x%X \n" % [paletteStart-off])
+			extrasFile.store_string("0x%X \n\n" % [paletteEnd-off])
+	
 	extrasFile.close()
 	file.close()
 	return 0
 
 func createPreviews():
 	var tileList = []
+	var spriteList = []
 	var stageFileName = stageNames[selectedStage]
 	
 	var file = FileAccess.open(stageFolder + "/" + stageFileName, FileAccess.READ)
 	if not file:
 		return 1
 	tileList = getTiles(file)
+	spriteList = getSprites(file)
 	
 	for i in range(tileList.size()):
 		file.seek(tileList[i]+4)
@@ -130,10 +183,14 @@ func createPreviews():
 		var width = file.get_16()
 		var height = file.get_16()
 		var paletteSize = (16**(bpp/4))
+		
+		if bpp == 4:
+			width /= 2
+		
 		file.seek(tileList[i]+12+(paletteSize*4))
 		var lastColor = file.get_32()
 		
-		var preview = FileAccess.open(outputFolder + "/" + selectedStage + " resources/Tile_" + str(i+1) + "-W-" + str(width) + "-H-" + str(height) + ".raw", FileAccess.WRITE)
+		var preview = FileAccess.open(outputFolder + "/" + selectedStage + " resources/previews/Tile_" + str(i+1) + "-W-" + str(width) + "-H-" + str(height) + ".raw", FileAccess.WRITE)
 		for j in range(height):
 			for k in range(width):
 				var byte = file.get_8()
@@ -147,8 +204,87 @@ func createPreviews():
 					byte += 1
 				preview.store_8(byte)
 		preview.close()
+	
+	if spriteList != ["no objects"]:
+		for i in range(spriteList.size()):
+			file.seek(spriteList[i]+4)
+			var bpp = file.get_16()
+			var width = file.get_16()
+			var height = file.get_16()
+			var paletteSize = (16**(bpp/4))
+			file.seek(spriteList[i]+12+(paletteSize*4))
+			var lastColor = file.get_32()
+			
+			var preview = FileAccess.open(outputFolder + "/" + selectedStage + " resources/previews/Sprite_" + str(i+1) + "-W-" + str(width) + "-H-" + str(height) + ".raw", FileAccess.WRITE)
+			for j in range(height):
+				for k in range(width):
+					var byte = file.get_8()
+					if bpp == 8:
+						if byte%32 > 7 and byte%32 < 23:
+							if byte%32 < 16:
+								byte += 8
+							else:
+								byte -= 8
+					if lastColor == 0:
+						byte += 1
+					preview.store_8(byte)
+			preview.close()
+	
 	file.close()
 	return 0
+
+func buildImage(file: FileAccess, resource, resourceType, i):
+	file.seek(resource+4)
+	var bpp = file.get_16()
+	var width = file.get_16()
+	var height = file.get_16()
+	var paletteSize = (16**(bpp/4))
+	
+	if bpp == 4:
+		width /= 2
+	
+	file.seek(resource+16)
+	
+	var palette = PackedColorArray()
+	for j in range(paletteSize):
+		var red = file.get_8()
+		var green = file.get_8()
+		var blue = file.get_8()
+		var alpha = (file.get_8() - 1) * 2
+		palette.append(Color8(red, green, blue, alpha))
+		
+	var image = Image.create(width, height, false, Image.FORMAT_RGBA8)
+	for y in range(height):
+		for x in range(width):
+			var byte = file.get_8()
+			if bpp == 8:
+				if byte%32 > 7 and byte%32 < 23:
+					if byte%32 < 16:
+						byte += 8
+					else:
+						byte -= 8
+			image.set_pixel(x, y, palette[byte & (paletteSize-1)])
+	image.save_png(outputFolder + "/" + selectedStage + " resources/pngs/" + resourceType + "_" + str(i+1) + ".png")
+
+func createPNGs():
+	var tileList = []
+	var spriteList = []
+	var stageFileName = stageNames[selectedStage]
+	
+	var file = FileAccess.open(stageFolder + "/" + stageFileName, FileAccess.READ)
+	if not file:
+		return 1
+	tileList = getTiles(file)
+	spriteList = getSprites(file)
+	
+	for i in range(tileList.size()):
+		buildImage(file, tileList[i], "Tile", i)
+	
+	if spriteList != ["no objects"]:
+		for i in range(spriteList.size()):
+			buildImage(file, spriteList[i], "Sprite", i)
+	
+	file.close()
 
 func _ready():
 	for i in stageNames:
@@ -164,7 +300,7 @@ func _on_button_pressed():
 	var inPath = str($StagesPath.text).replace("\\", "/")
 	var outPath = str($OutputPath.text).replace("\\", "/")
 	
-	if not $Options/Palettes.button_pressed and not $Options/Previews.button_pressed:
+	if not $Options/Palettes.button_pressed and not $Options/Previews.button_pressed and not $Options/PNGs.button_pressed:
 		$Error.text = "Error: No option selected"
 		$Timer.start()
 		await $Timer.timeout
@@ -222,6 +358,7 @@ func _on_button_pressed():
 		$Success.text = ""
 	
 	if get_node("Options/Previews").button_pressed:
+		DirAccess.make_dir_absolute(outputFolder + "/" + selectedStage + " resources/previews")
 		var result = createPreviews()
 		if result == 1:
 			$Error.text = "Error: Could not find stage file"
@@ -230,6 +367,20 @@ func _on_button_pressed():
 			$Error.text = ""
 			return 6
 		$Success.text = "Successfully created previews for " + selectedStage
+		$Timer.start()
+		await $Timer.timeout
+		$Success.text = ""
+	
+	if get_node("Options/PNGs").button_pressed:
+		DirAccess.make_dir_absolute(outputFolder + "/" + selectedStage + " resources/pngs")
+		var result = createPNGs()
+		if result == 1:
+			$Error.text = "Error: Could not find stage file"
+			$Timer.start()
+			await $Timer.timeout
+			$Error.text = ""
+			return 6
+		$Success.text = "Successfully created tiles PNGs for " + selectedStage
 		$Timer.start()
 		await $Timer.timeout
 		$Success.text = ""
